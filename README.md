@@ -1,13 +1,8 @@
-SpaceFormProject – Full Featured Local JSP + Servlet Dashboard
+ySpaceFormProject – Full Featured Local JSP + Servlet Dashboard
 
 > Purpose – A self‑contained web app (runs on local Tomcat 10 +) that lets you navigate, view, edit, bulk‑upload (CSV), delete, and paginate spacecraft records stored in MySQL.
 
 Copy the tree below, paste each file into its place, add the MySQL JDBC JAR to WEB-INF/lib, compile, and run.
-
-
-
-
----
 
 📁 Folder structure
 
@@ -487,4 +482,781 @@ Enjoy a colourful dashboard with dropdown navigation, CSV bulk‑upload, edit/sa
 I’ve placed the full project tree and source code—complete with CSV upload, per-record pagination, colourful UI, and all required JSP/Servlet logic—into the canvas on the right. Copy each file into the matching folder names, adjust your MySQL credentials in DBUtil.java, add the JDBC driver JAR, compile, and run on your local Tomcat.
 
 Let me know whenever you’d like tweaks (e.g., more parameters, extra validation, embedded Tomcat launcher, etc.) and we can iterate right inside the canvas. Happy building!
+
+
+
+
+
+
+
+SpaceFormProject – Complete Source (Enhanced UI)
+
+Below is 100 % of the code for every file in the structure you specified. Copy each snippet into the matching path and you can compile/run locally on Tomcat 10+ with no internet.
+
+> Features
+
+10 parameters per spacecraft (name, subsystem, orbit_type, status, launch_date, mass_kg, power_kw, fuel_level_pct, altitude_km, velocity_km_s)
+
+Fully center-aligned neon UI, two-column grid
+
+Navigation dropdown, per-record pagination, fixed Save/Delete/New row
+
+CSV bulk upload (no header required, 10 columns)
+
+All code uses Jakarta Servlet 10, JSTL 3, MySQL JDBC 8
+
+
+
+
+
+---
+
+📁 Folder structure
+
+SpaceFormProject/
+├─ src/com/example/space/
+│   ├─ DBUtil.java
+│   ├─ SpaceDAO.java
+│   ├─ CSVUtil.java
+│   └─ SpaceServlet.java
+├─ WebContent/
+│   ├─ index.jsp
+│   ├─ fragments/
+│   │   ├─ header.jsp
+│   │   └─ footer.jsp
+│   ├─ styles/style.css
+│   ├─ scripts/script.js
+│   └─ WEB-INF/
+│       ├─ web.xml
+│       └─ lib/
+│           ├─ mysql-connector-j-8.x.x.jar
+│           ├─ jakarta.servlet.jsp.jstl-api-3.0.1.jar
+│           └─ jakarta.servlet.jsp.jstl-3.0.1.jar
+└─ build_and_run.sh  (optional helper)
+
+
+---
+
+1  Java source – src/com/example/space/
+
+1.1  DBUtil.java
+
+package com.example.space;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+/** Simple helper to get a JDBC connection */
+public class DBUtil {
+    private static final String URL  = "jdbc:mysql://localhost:3306/spacecraft_db?useSSL=false&serverTimezone=UTC";
+    private static final String USER = "root";              // <<— change
+    private static final String PASS = "your_password";      // <<— change
+
+    public static Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(URL, USER, PASS);
+    }
+}
+
+1.2  SpaceDAO.java
+
+package com.example.space;
+
+import java.sql.*;
+import java.util.*;
+
+/** DAO layer encapsulating CRUD + pagination + bulk insert */
+public class SpaceDAO {
+
+    /* ───────────────── DTO ───────────────── */
+    public static class Craft {
+        public int id;
+        public String name, subsystem, orbitType, status, launchDate;
+        public String massKg, powerKw, fuelPct, altitudeKm, velocityKmS;
+    }
+
+    /* ───────────────── Helpers ───────────────── */
+    private Craft row(ResultSet rs) throws SQLException {
+        Craft c = new Craft();
+        c.id           = rs.getInt("craft_id");
+        c.name         = rs.getString("name");
+        c.subsystem    = rs.getString("subsystem");
+        c.orbitType    = rs.getString("orbit_type");
+        c.status       = rs.getString("status");
+        c.launchDate   = rs.getString("launch_date");
+        c.massKg       = rs.getString("mass_kg");
+        c.powerKw      = rs.getString("power_kw");
+        c.fuelPct      = rs.getString("fuel_level_pct");
+        c.altitudeKm   = rs.getString("altitude_km");
+        c.velocityKmS  = rs.getString("velocity_km_s");
+        return c;
+    }
+
+    /* ───────────────── Pagination ───────────────── */
+    public List<Craft> findPage(int offset, int limit) throws SQLException {
+        String sql = "SELECT * FROM spacecraft ORDER BY craft_id LIMIT ? OFFSET ?";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            ps.setInt(2, offset);
+            ResultSet rs = ps.executeQuery();
+            List<Craft> list = new ArrayList<>();
+            while (rs.next()) list.add(row(rs));
+            return list;
+        }
+    }
+
+    public int count() throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("SELECT COUNT(*) FROM spacecraft");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    /* ───────────────── Dropdown IDs ───────────────── */
+    public List<Integer> allIds() throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("SELECT craft_id FROM spacecraft ORDER BY craft_id");
+             ResultSet rs = ps.executeQuery()) {
+            List<Integer> ids = new ArrayList<>();
+            while (rs.next()) ids.add(rs.getInt(1));
+            return ids;
+        }
+    }
+
+    /* ───────────────── Save / Delete ───────────────── */
+    public void save(Craft c) throws SQLException {
+        String sql = c.id == 0 ?
+            "INSERT INTO spacecraft(name,subsystem,orbit_type,status,launch_date,mass_kg,power_kw,fuel_level_pct,altitude_km,velocity_km_s) VALUES (?,?,?,?,?,?,?,?,?,?)" :
+            "UPDATE spacecraft SET name=?,subsystem=?,orbit_type=?,status=?,launch_date=?,mass_kg=?,power_kw=?,fuel_level_pct=?,altitude_km=?,velocity_km_s=? WHERE craft_id=?";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            int i = 1;
+            ps.setString(i++, c.name);
+            ps.setString(i++, c.subsystem);
+            ps.setString(i++, c.orbitType);
+            ps.setString(i++, c.status);
+            ps.setString(i++, c.launchDate);
+            ps.setString(i++, c.massKg);
+            ps.setString(i++, c.powerKw);
+            ps.setString(i++, c.fuelPct);
+            ps.setString(i++, c.altitudeKm);
+            ps.setString(i++, c.velocityKmS);
+            if (c.id != 0) ps.setInt(i, c.id);
+            ps.executeUpdate();
+        }
+    }
+
+    public void delete(int id) throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("DELETE FROM spacecraft WHERE craft_id=?")) {
+            ps.setInt(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /* ───────────────── Bulk CSV ───────────────── */
+    public void bulkInsert(List<Craft> list) throws SQLException {
+        String sql = "INSERT INTO spacecraft(name,subsystem,orbit_type,status,launch_date,mass_kg,power_kw,fuel_level_pct,altitude_km,velocity_km_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            for (Craft c : list) {
+                int i = 1;
+                ps.setString(i++, c.name);
+                ps.setString(i++, c.subsystem);
+                ps.setString(i++, c.orbitType);
+                ps.setString(i++, c.status);
+                ps.setString(i++, c.launchDate);
+                ps.setString(i++, c.massKg);
+                ps.setString(i++, c.powerKw);
+                ps.setString(i++, c.fuelPct);
+                ps.setString(i++, c.altitudeKm);
+                ps.setString(i++, c.velocityKmS);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+}
+
+1.3  CSVUtil.java
+
+package com.example.space;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+/** Tiny CSV parser (10 columns, no header) */
+public class CSVUtil {
+    public static List<SpaceDAO.Craft> parse(InputStream in) throws IOException {
+        List<SpaceDAO.Craft> list = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String ln;
+            while ((ln = br.readLine()) != null) {
+                if (ln.isBlank()) continue;
+                String[] p = ln.split(",", -1);
+                if (p.length < 10) continue;      // skip bad lines
+                SpaceDAO.Craft c = new SpaceDAO.Craft();
+                c.name=p[0]; c.subsystem=p[1]; c.orbitType=p[2]; c.status=p[3];
+                c.launchDate=p[4]; c.massKg=p[5]; c.powerKw=p[6]; c.fuelPct=p[7];
+                c.altitudeKm=p[8]; c.velocityKmS=p[9];
+                list.add(c);
+            }
+        }
+        return list;
+    }
+}
+
+1.4  SpaceServlet.java
+
+package com.example.space;
+
+import jakarta.servlet.annotation.MultipartConfig;
+import jakarta.servlet.http.*;
+import jakarta.servlet.*;
+import java.io.IOException;
+import java.sql.SQLException;
+import java.util.List;
+
+@MultipartConfig(maxFileSize = 5*1024*1024)
+public class SpaceServlet extends HttpServlet {
+    private final SpaceDAO dao = new SpaceDAO();
+    private static final int PAGE_SIZE = 1;   // one record per page
+
+    @Override protected void doGet(HttpServletRequest rq, HttpServletResponse rs) throws ServletException, IOException {
+        try {
+            int page = 1;
+            String ps = rq.getParameter("page");
+            if (ps != null && !ps.isBlank()) page = Integer.parseInt(ps);
+            int total = dao.count();
+            int totalPages = Math.max(1, (int)Math.ceil(total/(double)PAGE_SIZE));
+            page = Math.max(1, Math.min(page, totalPages));
+            int offset = (page-1)*PAGE_SIZE;
+
+            List<SpaceDAO.Craft> currentPage = dao.findPage(offset, PAGE_SIZE);
+            SpaceDAO.Craft current = currentPage.isEmpty() ? null : currentPage.get(0);
+
+            rq.setAttribute("ids", dao.allIds());
+            rq.setAttribute("current", current);
+            rq.setAttribute("page", page);
+            rq.setAttribute("totalPages", totalPages);
+            rq.getRequestDispatcher("/index.jsp").forward(rq, rs);
+        } catch (SQLException e) {
+            throw new ServletException(e);
+        }
+    }
+
+    @Override protected void doPost(HttpServletRequest rq, HttpServletResponse rs) throws ServletException, IOException {
+        try {
+            String action = rq.getParameter("action");
+            if ("save".equals(action)) {
+                SpaceDAO.Craft c = new SpaceDAO.Craft();
+                String idStr = rq.getParameter("craft_id");
+                c.id = (idStr==null||idStr.isBlank()) ? 0 : Integer.parseInt(idStr);
+                c.name = rq.getParameter("name");
+                c.subsystem = rq.getParameter("subsystem");
+                c.orbitType = rq.getParameter("orbit_type");
+                c.status = rq.getParameter("status");
+                c.launchDate = rq.getParameter("launch_date");
+                c.massKg = rq.getParameter("mass_kg");
+                c.powerKw = rq.getParameter("power_kw");
+                c.fuelPct = rq.getParameter("fuel_level_pct");
+                c.altitudeKm = rq.getParameter("altitude_km");
+                c.velocityKmS = rq.getParameter("velocity_km_s");
+                dao.save(c);
+
+            } else if ("delete".equals(action)) {
+                int id = Integer.parseInt(rq.getParameter("craft_id"));
+                dao.delete(id);
+
+            } else if ("upload".equals(action)) {
+                Part file = rq.getPart("csvfile");
+                if (file != null && file.getSize()>0) {
+                    List<SpaceDAO.Craft> list = CSVUtil.parse(file.getInputStream());
+                    dao.bulkInsert(list);
+                }
+            }
+            rs.sendRedirect(rq.getContextPath() + "/SpaceServlet");
+        } catch (SQLException e) {
+            throw new ServletException(e);
+        }
+    }
+}
+
+
+---
+
+2  Web descriptor – WebContent/WEB-INF/web.xml
+
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee" version="10">
+    <servlet>
+        <servlet-name>SpaceServlet</servlet-name>
+        <servlet-class>com.example.space.SpaceServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>SpaceServlet</servlet-name>
+        <url-pattern>/SpaceServlet</url-pattern>
+    </servlet-mapping>
+    <welcome-file-list>
+        <welcome-file>SpaceServlet</welcome-file>
+    </welcome-file-list>
+</web-app>
+
+
+---
+
+3  JSP views – WebContent/
+
+3.1  fragments/header.jsp
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Spacecraft Dashboard</title>
+    <link rel="stylesheet" href="styles/style.css" />
+    <script src="scripts/script.js" defer></script>
+</head>
+<body>
+
+3.2  fragments/footer.jsp
+
+</body>
+</html>
+
+3.3  index.jsp
+
+<%@ page contentType="text/html; charset=UTF-8" %>
+<%@ taglib uri="https://jakarta.ee/jsp/jstl/core" prefix="c" %>
+<jsp:include page="fragments/header.jsp"/>
+
+<div class="outer">
+  <aside class="nav">
+    <h2>Jump to ID</h2>
+    <form method="get" action="SpaceServlet">
+      <select name="page" onchange="this.form.submit()">
+        <c:forEach var="id" items="${ids}" varStatus="st">
+          <option value="${st.index+1}" ${st.index+1==page?"selected":""}>#${id}</option>
+        </c:forEach>
+      </select>
+    </form>
+
+    <h2 class="mt">Bulk CSV</h2>
+    <form method="post" action="SpaceServlet" enctype="multipart/form-data">
+      <input type="file" name="csvfile" accept=".csv" required />
+      <button class="upload" type="submit" name="action" value="upload">⇪ Upload</button>
+    </form>
+  </aside>
+
+  <main class="card">
+    <c:choose>
+      <c:when test="${current!=null}">
+        <form method="post" action="SpaceServlet">
+          <input type="hidden" name="craft_id" value="${current.id}" />
+
+          <div class="grid">
+            <label>Name <input type="text" name="name" value="${current.name}" required /></label>
+            <label>Subsystem <input type="text" name="subsystem" value="${current.subsystem}" required /></label>
+            <label>Orbit Type <input type="text" name="orbit_type" value="${current.orbitType}" required /></label>
+            <label>Status <input type="text" name="status" value="${current.status}" required /></label>
+            <label>Launch Date <input type="date" name="launch_date" value="${current.launchDate}" /></label>
+            <label>Mass (kg) <input type="number" name="mass_kg" value="${current.massKg}" step="0.1" /></label>
+            <label>Power (kW) <input type="number" name="power_kw" value="${current.powerKw}" step="0.1" /></label>
+            <label>Fuel (%) <input type="number" name="fuel_level_pct" value="${current.fuelPct}" /></label>
+            <label>Altitude (km) <input type="number" name="altitude_km" value="${current.altitudeKm}" step="0.1" /></label>
+            <label>Velocity (km/s) <input type="number" name="velocity_km_s" value="${current.velocityKmS}" step="0.01" /></label>
+          </div>
+
+          <div class="btn-row">
+            <button type="
+
+
+
+
+            SpaceFormProject – Complete Source (Enhanced UI)
+
+Below is 100 % of the code for every file in the structure you specified. Copy each snippet into the matching path and you can compile/run locally on Tomcat 10+ with no internet.
+
+> Features
+
+10 parameters per spacecraft (name, subsystem, orbit_type, status, launch_date, mass_kg, power_kw, fuel_level_pct, altitude_km, velocity_km_s)
+
+Fully center-aligned neon UI, two-column grid
+
+Navigation dropdown, per-record pagination, fixed Save/Delete/New row
+
+CSV bulk upload (no header required, 10 columns)
+
+All code uses Jakarta Servlet 10, JSTL 3, MySQL JDBC 8
+
+
+
+
+
+---
+
+📁 Folder structure
+
+SpaceFormProject/
+├─ src/com/example/space/
+│   ├─ DBUtil.java
+│   ├─ SpaceDAO.java
+│   ├─ CSVUtil.java
+│   └─ SpaceServlet.java
+├─ WebContent/
+│   ├─ index.jsp
+│   ├─ fragments/
+│   │   ├─ header.jsp
+│   │   └─ footer.jsp
+│   ├─ styles/style.css
+│   ├─ scripts/script.js
+│   └─ WEB-INF/
+│       ├─ web.xml
+│       └─ lib/
+│           ├─ mysql-connector-j-8.x.x.jar
+│           ├─ jakarta.servlet.jsp.jstl-api-3.0.1.jar
+│           └─ jakarta.servlet.jsp.jstl-3.0.1.jar
+└─ build_and_run.sh  (optional helper)
+
+
+---
+
+1  Java source – src/com/example/space/
+
+1.1  DBUtil.java
+
+package com.example.space;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+/** Simple helper to get a JDBC connection */
+public class DBUtil {
+    private static final String URL  = "jdbc:mysql://localhost:3306/spacecraft_db?useSSL=false&serverTimezone=UTC";
+    private static final String USER = "root";              // <<— change
+    private static final String PASS = "your_password";      // <<— change
+
+    public static Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(URL, USER, PASS);
+    }
+}
+
+1.2  SpaceDAO.java
+
+package com.example.space;
+
+import java.sql.*;
+import java.util.*;
+
+/** DAO layer encapsulating CRUD + pagination + bulk insert */
+public class SpaceDAO {
+
+    /* ───────────────── DTO ───────────────── */
+    public static class Craft {
+        public int id;
+        public String name, subsystem, orbitType, status, launchDate;
+        public String massKg, powerKw, fuelPct, altitudeKm, velocityKmS;
+    }
+
+    /* ───────────────── Helpers ───────────────── */
+    private Craft row(ResultSet rs) throws SQLException {
+        Craft c = new Craft();
+        c.id           = rs.getInt("craft_id");
+        c.name         = rs.getString("name");
+        c.subsystem    = rs.getString("subsystem");
+        c.orbitType    = rs.getString("orbit_type");
+        c.status       = rs.getString("status");
+        c.launchDate   = rs.getString("launch_date");
+        c.massKg       = rs.getString("mass_kg");
+        c.powerKw      = rs.getString("power_kw");
+        c.fuelPct      = rs.getString("fuel_level_pct");
+        c.altitudeKm   = rs.getString("altitude_km");
+        c.velocityKmS  = rs.getString("velocity_km_s");
+        return c;
+    }
+
+    /* ───────────────── Pagination ───────────────── */
+    public List<Craft> findPage(int offset, int limit) throws SQLException {
+        String sql = "SELECT * FROM spacecraft ORDER BY craft_id LIMIT ? OFFSET ?";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            ps.setInt(2, offset);
+            ResultSet rs = ps.executeQuery();
+            List<Craft> list = new ArrayList<>();
+            while (rs.next()) list.add(row(rs));
+            return list;
+        }
+    }
+
+    public int count() throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("SELECT COUNT(*) FROM spacecraft");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    /* ───────────────── Dropdown IDs ───────────────── */
+    public List<Integer> allIds() throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("SELECT craft_id FROM spacecraft ORDER BY craft_id");
+             ResultSet rs = ps.executeQuery()) {
+            List<Integer> ids = new ArrayList<>();
+            while (rs.next()) ids.add(rs.getInt(1));
+            return ids;
+        }
+    }
+
+    /* ───────────────── Save / Delete ───────────────── */
+    public void save(Craft c) throws SQLException {
+        String sql = c.id == 0 ?
+            "INSERT INTO spacecraft(name,subsystem,orbit_type,status,launch_date,mass_kg,power_kw,fuel_level_pct,altitude_km,velocity_km_s) VALUES (?,?,?,?,?,?,?,?,?,?)" :
+            "UPDATE spacecraft SET name=?,subsystem=?,orbit_type=?,status=?,launch_date=?,mass_kg=?,power_kw=?,fuel_level_pct=?,altitude_km=?,velocity_km_s=? WHERE craft_id=?";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            int i = 1;
+            ps.setString(i++, c.name);
+            ps.setString(i++, c.subsystem);
+            ps.setString(i++, c.orbitType);
+            ps.setString(i++, c.status);
+            ps.setString(i++, c.launchDate);
+            ps.setString(i++, c.massKg);
+            ps.setString(i++, c.powerKw);
+            ps.setString(i++, c.fuelPct);
+            ps.setString(i++, c.altitudeKm);
+            ps.setString(i++, c.velocityKmS);
+            if (c.id != 0) ps.setInt(i, c.id);
+            ps.executeUpdate();
+        }
+    }
+
+    public void delete(int id) throws SQLException {
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement("DELETE FROM spacecraft WHERE craft_id=?")) {
+            ps.setInt(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /* ───────────────── Bulk CSV ───────────────── */
+    public void bulkInsert(List<Craft> list) throws SQLException {
+        String sql = "INSERT INTO spacecraft(name,subsystem,orbit_type,status,launch_date,mass_kg,power_kw,fuel_level_pct,altitude_km,velocity_km_s) VALUES (?,?,?,?,?,?,?,?,?,?)";
+        try (Connection con = DBUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            for (Craft c : list) {
+                int i = 1;
+                ps.setString(i++, c.name);
+                ps.setString(i++, c.subsystem);
+                ps.setString(i++, c.orbitType);
+                ps.setString(i++, c.status);
+                ps.setString(i++, c.launchDate);
+                ps.setString(i++, c.massKg);
+                ps.setString(i++, c.powerKw);
+                ps.setString(i++, c.fuelPct);
+                ps.setString(i++, c.altitudeKm);
+                ps.setString(i++, c.velocityKmS);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+}
+
+1.3  CSVUtil.java
+
+package com.example.space;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+/** Tiny CSV parser (10 columns, no header) */
+public class CSVUtil {
+    public static List<SpaceDAO.Craft> parse(InputStream in) throws IOException {
+        List<SpaceDAO.Craft> list = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String ln;
+            while ((ln = br.readLine()) != null) {
+                if (ln.isBlank()) continue;
+                String[] p = ln.split(",", -1);
+                if (p.length < 10) continue;      // skip bad lines
+                SpaceDAO.Craft c = new SpaceDAO.Craft();
+                c.name=p[0]; c.subsystem=p[1]; c.orbitType=p[2]; c.status=p[3];
+                c.launchDate=p[4]; c.massKg=p[5]; c.powerKw=p[6]; c.fuelPct=p[7];
+                c.altitudeKm=p[8]; c.velocityKmS=p[9];
+                list.add(c);
+            }
+        }
+        return list;
+    }
+}
+
+1.4  SpaceServlet.java
+
+package com.example.space;
+
+import jakarta.servlet.annotation.MultipartConfig;
+import jakarta.servlet.http.*;
+import jakarta.servlet.*;
+import java.io.IOException;
+import java.sql.SQLException;
+import java.util.List;
+
+@MultipartConfig(maxFileSize = 5*1024*1024)
+public class SpaceServlet extends HttpServlet {
+    private final SpaceDAO dao = new SpaceDAO();
+    private static final int PAGE_SIZE = 1;   // one record per page
+
+    @Override protected void doGet(HttpServletRequest rq, HttpServletResponse rs) throws ServletException, IOException {
+        try {
+            int page = 1;
+            String ps = rq.getParameter("page");
+            if (ps != null && !ps.isBlank()) page = Integer.parseInt(ps);
+            int total = dao.count();
+            int totalPages = Math.max(1, (int)Math.ceil(total/(double)PAGE_SIZE));
+            page = Math.max(1, Math.min(page, totalPages));
+            int offset = (page-1)*PAGE_SIZE;
+
+            List<SpaceDAO.Craft> currentPage = dao.findPage(offset, PAGE_SIZE);
+            SpaceDAO.Craft current = currentPage.isEmpty() ? null : currentPage.get(0);
+
+            rq.setAttribute("ids", dao.allIds());
+            rq.setAttribute("current", current);
+            rq.setAttribute("page", page);
+            rq.setAttribute("totalPages", totalPages);
+            rq.getRequestDispatcher("/index.jsp").forward(rq, rs);
+        } catch (SQLException e) {
+            throw new ServletException(e);
+        }
+    }
+
+    @Override protected void doPost(HttpServletRequest rq, HttpServletResponse rs) throws ServletException, IOException {
+        try {
+            String action = rq.getParameter("action");
+            if ("save".equals(action)) {
+                SpaceDAO.Craft c = new SpaceDAO.Craft();
+                String idStr = rq.getParameter("craft_id");
+                c.id = (idStr==null||idStr.isBlank()) ? 0 : Integer.parseInt(idStr);
+                c.name = rq.getParameter("name");
+                c.subsystem = rq.getParameter("subsystem");
+                c.orbitType = rq.getParameter("orbit_type");
+                c.status = rq.getParameter("status");
+                c.launchDate = rq.getParameter("launch_date");
+                c.massKg = rq.getParameter("mass_kg");
+                c.powerKw = rq.getParameter("power_kw");
+                c.fuelPct = rq.getParameter("fuel_level_pct");
+                c.altitudeKm = rq.getParameter("altitude_km");
+                c.velocityKmS = rq.getParameter("velocity_km_s");
+                dao.save(c);
+
+            } else if ("delete".equals(action)) {
+                int id = Integer.parseInt(rq.getParameter("craft_id"));
+                dao.delete(id);
+
+            } else if ("upload".equals(action)) {
+                Part file = rq.getPart("csvfile");
+                if (file != null && file.getSize()>0) {
+                    List<SpaceDAO.Craft> list = CSVUtil.parse(file.getInputStream());
+                    dao.bulkInsert(list);
+                }
+            }
+            rs.sendRedirect(rq.getContextPath() + "/SpaceServlet");
+        } catch (SQLException e) {
+            throw new ServletException(e);
+        }
+    }
+}
+
+
+---
+
+2  Web descriptor – WebContent/WEB-INF/web.xml
+
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee" version="10">
+    <servlet>
+        <servlet-name>SpaceServlet</servlet-name>
+        <servlet-class>com.example.space.SpaceServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>SpaceServlet</servlet-name>
+        <url-pattern>/SpaceServlet</url-pattern>
+    </servlet-mapping>
+    <welcome-file-list>
+        <welcome-file>SpaceServlet</welcome-file>
+    </welcome-file-list>
+</web-app>
+
+
+---
+
+3  JSP views – WebContent/
+
+3.1  fragments/header.jsp
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Spacecraft Dashboard</title>
+    <link rel="stylesheet" href="styles/style.css" />
+    <script src="scripts/script.js" defer></script>
+</head>
+<body>
+
+3.2  fragments/footer.jsp
+
+</body>
+</html>
+
+3.3  index.jsp
+
+<%@ page contentType="text/html; charset=UTF-8" %>
+<%@ taglib uri="https://jakarta.ee/jsp/jstl/core" prefix="c" %>
+<jsp:include page="fragments/header.jsp"/>
+
+<div class="outer">
+  <aside class="nav">
+    <h2>Jump to ID</h2>
+    <form method="get" action="SpaceServlet">
+      <select name="page" onchange="this.form.submit()">
+        <c:forEach var="id" items="${ids}" varStatus="st">
+          <option value="${st.index+1}" ${st.index+1==page?"selected":""}>#${id}</option>
+        </c:forEach>
+      </select>
+    </form>
+
+    <h2 class="mt">Bulk CSV</h2>
+    <form method="post" action="SpaceServlet" enctype="multipart/form-data">
+      <input type="file" name="csvfile" accept=".csv" required />
+      <button class="upload" type="submit" name="action" value="upload">⇪ Upload</button>
+    </form>
+  </aside>
+
+  <main class="card">
+    <c:choose>
+      <c:when test="${current!=null}">
+        <form method="post" action="SpaceServlet">
+          <input type="hidden" name="craft_id" value="${current.id}" />
+
+          <div class="grid">
+            <label>Name <input type="text" name="name" value="${current.name}" required /></label>
+            <label>Subsystem <input type="text" name="subsystem" value="${current.subsystem}" required /></label>
+            <label>Orbit Type <input type="text" name="orbit_type" value="${current.orbitType}" required /></label>
+            <label>Status <input type="text" name="status" value="${current.status}" required /></label>
+            <label>Launch Date <input type="date" name="launch_date" value="${current.launchDate}" /></label>
+            <label>Mass (kg) <input type="number" name="mass_kg" value="${current.massKg}" step="0.1" /></label>
+            <label>Power (kW) <input type="number" name="power_kw" value="${current.powerKw}" step="0.1" /></label>
+            <label>Fuel (%) <input type="number" name="fuel_level_pct" value="${current.fuelPct}" /></label>
+            <label>Altitude (km) <input type="number" name="altitude_km" value="${current.altitudeKm}" step="0.1" /></label>
+            <label>Velocity (km/s) <input type="number" name="velocity_km_s" value="${current.velocityKmS}" step="0.01" /></label>
+          </div>
+
+          <div class="btn-row">
+            <button type="
 
